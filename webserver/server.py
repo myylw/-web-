@@ -46,7 +46,7 @@ class NestedContext(Context):
         return self.globalcontext[item]
 
 
-class Router:
+class _Router:
     TYPEPATTERN = {
         'str': r'[^/]+',
         'int': r'[+-]?\d+',
@@ -124,23 +124,24 @@ class Router:
                     for k, v in matcher.groupdict().items():
                         newdict[k] = translator[k](v)
                     request.vars = DictObj(newdict)
-                    response = handler(self.ctx, request)
 
-                return response
+                return handler(self.ctx, request)
 
 
-class Application:
+class MyWebServer:
     ctx = Context()
+    Router = _Router
+    Request = Request
+    Response = Response
+    ROUTERS = []
 
     def __init__(self, **kwargs):
         self.ctx.app = self
         for k, v in kwargs:
             self.ctx[k] = v
 
-    ROUTERS = []
-
     @classmethod
-    def register(cls, router: Router):
+    def register(cls, router: _Router):
         router.ctx.relate(cls.ctx)
         router.ctx.router = router
         cls.ROUTERS.append(router)
@@ -148,7 +149,7 @@ class Application:
     @wsgify
     def __call__(self, request):
         for router in self.ROUTERS:
-            print(request)
+            # print(request)
             response = router.match(request)
 
             if response:
@@ -159,25 +160,3 @@ class Application:
     @classmethod
     def extend(cls, name, plugin):
         cls.ctx[name] = plugin
-
-
-index = Router('/')
-Application.register(index)
-
-
-@index.get('/')
-def index_test(ctx, request: Request):
-    print(ctx)
-    print(request)
-
-    res = Response()
-    res.status_code = 200
-    res.charset = 'utf-8'
-    res.body = '<h1>test</h1>'.encode()
-    return res
-
-
-if __name__ == '__main__':
-    ip, port = '127.0.0.1', 8888
-    server = make_server(ip, port, Application())
-    server.serve_forever()
