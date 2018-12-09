@@ -1,4 +1,3 @@
-from wsgiref.simple_server import make_server
 from webob import Request, exc, Response
 from webob.dec import wsgify
 import re
@@ -90,10 +89,20 @@ class _Router:
         self.__prefix = prefix.rstrip('/\\')
         self.__routetable = []
         self.ctx = NestedContext()
+        self.pre_interceptor = []
+        self.post_interceptor = []
 
     @property
     def prefix(self):
         return self.__prefix
+
+    def register_preinterceptor(self, fn):
+        self.pre_interceptor.append(fn)
+        return fn
+
+    def register_postinterceptor(self, fn):
+        self.post_interceptor.append(fn)
+        return fn
 
     def route(self, rule, *methods):
         def wrapper(handler):
@@ -116,6 +125,10 @@ class _Router:
         if not request.path.startswith(self.__prefix):
             return None
 
+        # request middleware
+        for fn in self.pre_interceptor:
+            request = fn(self.ctx, request)
+
         for methods, pattern, translator, handler in self.__routetable:
             if not methods or request.method.upper() in methods:
                 matcher = pattern.match(request.path.replace(self.__prefix, '', 1))
@@ -124,21 +137,42 @@ class _Router:
                     for k, v in matcher.groupdict().items():
                         newdict[k] = translator[k](v)
                     request.vars = DictObj(newdict)
+                    response = handler(self.ctx, request)
 
-                return handler(self.ctx, request)
+                # response middleware
+                    for fn in self.post_interceptor:
+                        response = fn(self.ctx, request, response)
+
+                    return response
+        return
 
 
 class MyWebServer:
-    ctx = Context()
     Router = _Router
     Request = Request
     Response = Response
+
+    ctx = Context()
     ROUTERS = []
+    PRE_INTERCEPTOR = []
+    POST_INTERCEPTOR = []
 
     def __init__(self, **kwargs):
         self.ctx.app = self
         for k, v in kwargs:
             self.ctx[k] = v
+
+    # interceptor reg
+    @classmethod
+    def register_preinterceptor(cls, fn):
+        cls.PRE_INTERCEPTOR.append(fn)
+        return fn
+
+    # post response interceptor
+    @classmethod
+    def register_postinterceptor(cls, fn):
+        cls.POST_INTERCEPTOR.append(fn)
+        return fn
 
     @classmethod
     def register(cls, router: _Router):
@@ -148,9 +182,18 @@ class MyWebServer:
 
     @wsgify
     def __call__(self, request):
+        # request interceptor match
+        for fn in self.PRE_INTERCEPTOR:
+            request = fn(self.ctx, request)
+
+        # match
         for router in self.ROUTERS:
             # print(request)
             response = router.match(request)
+
+            # response interceptor match
+            for fn in self.POST_INTERCEPTOR:
+                response = fn(self.ctx, request, response)
 
             if response:
                 return response
@@ -158,5 +201,5 @@ class MyWebServer:
         raise exc.HTTPNotFound()
 
     @classmethod
-    def extend(cls, name, plugin):
+    def extend_plugins(cls, name, plugin):
         cls.ctx[name] = plugin
